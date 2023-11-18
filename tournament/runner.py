@@ -1,12 +1,53 @@
 import logging
 import numpy as np
 from collections import namedtuple
+from PIL import Image
+from os import path, makedirs
+
+from pystk import ObjectType
 
 TRACK_NAME = 'icy_soccer_field'
 MAX_FRAMES = 1000
+TRAIN_DATA_PATH = 'train_data'
 
 RunnerInfo = namedtuple('RunnerInfo', ['agent_type', 'error', 'total_act_time'])
 
+
+def _to_image(x, proj, view):
+    p = proj @ view @ np.array(list(x) + [1])
+    return np.clip(np.array([p[0] / p[-1], -p[1] / p[-1]]), -1, 1)
+
+
+def collect_training_data(race, frame, state, n_players=4):
+    
+    try:
+        makedirs(TRAIN_DATA_PATH)
+    except OSError:
+        pass
+    
+    puck_label = state.soccer.ball.id
+
+    for i in range(n_players):
+
+        image = race.render_data[i].image
+
+        label = race.render_data[i].instance
+
+        fn = path.join(TRAIN_DATA_PATH, '%05d' % i)
+
+        Image.fromarray(image).save(fn + f"_{frame}.png")
+
+        # get the puck location in world coordinate
+        puck_location = state.soccer.ball.location
+        proj = np.array(state.players[i].camera.projection).T
+        view = np.array(state.players[i].camera.view).T
+
+        # convert the puck location to screen coordinate
+        aim_point_image = _to_image(puck_location, proj, view)
+
+        with open(fn + f"_{frame}.csv", mode='w') as f:
+                          
+              f.write('%0.1f,%0.1f' % tuple(aim_point_image))
 
 def to_native(o):
     # Super obnoxious way to hide pystk
@@ -218,6 +259,9 @@ class Match:
             if self._use_graphics:
                 team1_images = [np.array(race.render_data[i].image) for i in range(0, len(race.render_data), 2)]
                 team2_images = [np.array(race.render_data[i].image) for i in range(1, len(race.render_data), 2)]
+                
+                if args.collect_data:
+                    collect_training_data(race, it, state)
 
             # Have each team produce actions (in parallel)
             if t1_can_act:
@@ -286,6 +330,7 @@ if __name__ == '__main__':
     parser.add_argument('--ball_velocity', default=[0, 0], type=float, nargs=2, help="Initial xy velocity of ball")
     parser.add_argument('team1', help="Python module name or `AI` for AI players.")
     parser.add_argument('team2', help="Python module name or `AI` for AI players.")
+    parser.add_argument('-c', '--collect_data', default=TRAIN_DATA_PATH)
     args = parser.parse_args()
 
     logging.basicConfig(level=environ.get('LOGLEVEL', 'WARNING').upper())
@@ -304,7 +349,7 @@ if __name__ == '__main__':
             recorder = recorder & utils.StateRecorder(args.record_state)
 
         # Start the match
-        match = Match(use_graphics=team1.agent_type == 'image' or team2.agent_type == 'image')
+        match = Match(use_graphics=True)
         try:
             result = match.run(team1, team2, args.num_players, args.num_frames, max_score=args.max_score,
                                initial_ball_location=args.ball_location, initial_ball_velocity=args.ball_velocity,
@@ -342,7 +387,7 @@ if __name__ == '__main__':
                 recorder = remote.RayStateRecorder.remote(args.record_state.replace(ext, f'.{i}{ext}'))
 
             match = remote.RayMatch.remote(logging_level=getattr(logging, environ.get('LOGLEVEL', 'WARNING').upper()),
-                                           use_graphics=team1_type == 'image' or team2_type == 'image')
+                                           use_graphics=True)
             result = match.run.remote(team1, team2, args.num_players, args.num_frames, max_score=args.max_score,
                                       initial_ball_location=args.ball_location,
                                       initial_ball_velocity=args.ball_velocity,
