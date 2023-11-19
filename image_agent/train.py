@@ -1,4 +1,4 @@
-from .planner import Planner, save_model 
+from .planner import Planner, save_model
 import torch
 import torch.utils.tensorboard as tb
 import numpy as np
@@ -56,6 +56,8 @@ def train(args):
         save_model(model)
 
     save_model(model)
+    model_scripted = torch.jit.script(model) # Export to TorchScript
+    model_scripted.save(path.join(path.dirname(path.abspath(__file__)), 'image_agent.pt')) # Save
 
 def log(logger, img, label, pred, global_step):
     import matplotlib.pyplot as plt
