@@ -51,13 +51,11 @@ def train(args):
             losses.append(loss_val.detach().cpu().numpy())
         
         avg_loss = np.mean(losses)
-        if train_logger is None:
-            print('epoch %-3d \t loss = %0.3f' % (epoch, avg_loss))
+        
+        print('epoch %-3d \t loss = %0.3f' % (epoch, avg_loss))
         save_model(model)
 
     save_model(model)
-    model_scripted = torch.jit.script(model) # Export to TorchScript
-    model_scripted.save(path.join(path.dirname(path.abspath(__file__)), 'image_agent.pt')) # Save
 
 def log(logger, img, label, pred, global_step):
     import matplotlib.pyplot as plt
