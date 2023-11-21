@@ -79,8 +79,14 @@ class Planner(torch.nn.Module):
                 c += skip_layer_size[i]
         self.classifier = torch.nn.Conv2d(c, n_output_channels, 1)
 
-    def forward(self, x):
-        z = (x - self.input_mean[None, :, None, None].to(x.device)) / self.input_std[None, :, None, None].to(x.device)
+    def forward(self, img):
+        """
+        Your code here
+        Predict the aim point in image coordinate, given the supertuxkart image
+        @img: (B,3,96,128)
+        return (B,2)
+        """
+        z = (img - self.input_mean[None, :, None, None].to(img.device)) / self.input_std[None, :, None, None].to(img.device)
         up_activation = []
         for i in range(self.n_conv):
             # Add all the information required for skip connections

@@ -1,3 +1,11 @@
+from os import path 
+import numpy as np
+import torch
+from .planner import load_model
+import torchvision.transforms.functional as TF
+import matplotlib.pyplot as plt
+
+device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 class Team:
     agent_type = 'image'
@@ -8,7 +16,9 @@ class Team:
           We will call this function with default arguments only
         """
         self.team = None
+        self.model = load_model()
         self.num_players = None
+        self.transform = TF.to_tensor
 
     def new_match(self, team: int, num_players: int) -> list:
         """
@@ -61,5 +71,36 @@ class Team:
                  rescue:       bool (optional. no clue where you will end up though.)
                  steer:        float -1..1 steering angle
         """
+        image_1 = self.transform(player_image[0])
+        pred1 = self.model(image_1).cpu().detach().numpy()
+
+
+        puck_locaton = pred1[0][0]
+
+
+        player_1 = player_state[0]
+
+        front = np.array(player_1['kart']['front'])[[0]]
+        loc = np.array(player_1['kart']['location'])[[0]]
+        velocity = np.array(player_1['kart']['velocity'])
+
+
+        direction = (front - loc)
+        direction /= np.linalg.norm(direction)
+
+        from matplotlib.patches import Circle
+
+        # the code below draw red circle on the aim point (model output)
+        f, axes = plt.subplots(1, 1)
+        img, point = image_1, pred1[0]
+        WH2 = np.array([img.size(-1), img.size(-2)])/2
+        axes.imshow(img.permute(1, 2, 0))
+        axes.axis('off')
+        circle = Circle(WH2*(point+1), ec='r', fill=False, lw=2)
+        axes.add_patch(circle)
+
+        plt.savefig("test_pred.png") 
+
+
         # TODO: Change me. I'm just cruising straight
-        return [dict(acceleration=1, steer=0)] * self.num_players
+        return [dict(acceleration=1, steer=direction)] * self.num_players
