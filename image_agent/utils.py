@@ -1,6 +1,6 @@
 import numpy as np
 import pystk
-
+import matplotlib.pyplot as plt
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms.functional as TF
 from . import dense_transforms
@@ -9,6 +9,19 @@ RESCUE_TIMEOUT = 30
 TRACK_OFFSET = 15
 DATASET_PATH = 'drive_data'
 
+def save_image(image, pred):
+    from matplotlib.patches import Circle
+
+    # the code below draw red circle on the aim point (model output)
+    f, axes = plt.subplots(1, 1)
+    img, point = image, pred[0]
+    WH2 = np.array([img.size(-1), img.size(-2)])/2
+    axes.imshow(img.permute(1, 2, 0))
+    axes.axis('off')
+    circle = Circle(WH2*(point+1), ec='r', fill=False, lw=2)
+    axes.add_patch(circle)
+
+    plt.savefig("test_pred.png")
 
 class SuperTuxDataset(Dataset):
     def __init__(self, dataset_path=DATASET_PATH, transform=dense_transforms.ToTensor()):

@@ -4,7 +4,7 @@ import torch
 from .planner import load_model
 import torchvision.transforms.functional as TF
 import matplotlib.pyplot as plt
-
+from .utils import save_image
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 class Team:
@@ -71,36 +71,44 @@ class Team:
                  rescue:       bool (optional. no clue where you will end up though.)
                  steer:        float -1..1 steering angle
         """
-        image_1 = self.transform(player_image[0])
-        pred1 = self.model(image_1).cpu().detach().numpy()
+
+        ret = []
+        acceleration = 1
+
+        for i, img in enumerate(player_image):
+            plt.imsave(f'player_image_{i}.png', img)
+            image = self.transform(player_image[i])
+            pred = self.model(image).cpu().detach().numpy()
+
+            puck_locaton = pred[0][0]
+            print("puck", puck_locaton)
+            save_image(image, pred)
+
+            player= player_state[i]
+            front = np.array(player['kart']['front'])[[0]]
+            loc = np.array(player['kart']['location'])[[0]]
+            velocity = np.array(player['kart']['velocity'])
+            velocity = np.linalg.norm(velocity)
+            print("velocity: ", velocity)
+            if velocity >= 5:
+                acceleration = 0
+            else:
+                acceleration = 1
 
 
-        puck_locaton = pred1[0][0]
+            ret.append(dict(acceleration=acceleration, steer=puck_locaton))
 
 
-        player_1 = player_state[0]
 
-        front = np.array(player_1['kart']['front'])[[0]]
-        loc = np.array(player_1['kart']['location'])[[0]]
-        velocity = np.array(player_1['kart']['velocity'])
+
 
 
         direction = (front - loc)
+        print(direction)
         direction /= np.linalg.norm(direction)
 
-        from matplotlib.patches import Circle
-
-        # the code below draw red circle on the aim point (model output)
-        f, axes = plt.subplots(1, 1)
-        img, point = image_1, pred1[0]
-        WH2 = np.array([img.size(-1), img.size(-2)])/2
-        axes.imshow(img.permute(1, 2, 0))
-        axes.axis('off')
-        circle = Circle(WH2*(point+1), ec='r', fill=False, lw=2)
-        axes.add_patch(circle)
-
-        plt.savefig("test_pred.png") 
 
 
         # TODO: Change me. I'm just cruising straight
-        return [dict(acceleration=1, steer=direction)] * self.num_players
+        return ret
+        #return [dict(acceleration=0.5, steer=puck_locaton)] * self.num_players
