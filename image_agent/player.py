@@ -76,13 +76,23 @@ class Team:
                  rescue:       bool (optional. no clue where you will end up though.)
                  steer:        float -1..1 steering angle
         """
+        import time
+
         GOALS = np.float32([[0, 64.5], [0, -64.5]])
 
         for i, img in enumerate(player_image):
+
+            start_time = time.time()
             action = self.actions[i]
+
             image = self.transform(img)
+            image = image.unsqueeze(0)
             pred = self.model(image).cpu().detach().numpy()
 
+            end_time = time.time()
+            if end_time - start_time >= 0.05:
+                print('Warning, the act function took more than 50 milliseconds')
+            
             puck_location_x = pred[0,0]
             puck_location_y = pred[0,1]
 
