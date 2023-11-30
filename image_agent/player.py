@@ -5,6 +5,8 @@ from .planner import load_model
 import torchvision.transforms.functional as TF
 import matplotlib.pyplot as plt
 from .utils import save_image
+from collections import deque
+
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 def norm(vector):
@@ -18,13 +20,23 @@ class Team:
           TODO: Load your agent here. Load network parameters, and other parts of our model
           We will call this function with default arguments only
         """
+        
         self.team = None
         self.model = load_model()
         self.num_players = None
         self.transform = TF.to_tensor
         self.actions = [{'acceleration': 0, 'brake': False, 'drift': False, 'nitro': False, 'rescue': False, 'steer': 0},
                         {'acceleration': 0, 'brake': False, 'drift': False, 'nitro': False, 'rescue': False, 'steer': 0}]
-
+        
+        self.prev_puck_location = []
+        self.past_states = [None, None]
+        self.past_puck_locations = deque(maxlen=5)
+        self.past_kart_locations = [deque(maxlen=5), deque(maxlen=5)]
+        self.past_actions = [deque(maxlen=5), deque(maxlen=5)]
+        self.stuck_count = 0
+        
+        self.goal = [(-10.4, -64.5), (-10.4, 64.5)]
+        
     def new_match(self, team: int, num_players: int) -> list:
         """
         Let's start a new match. You're playing on a `team` with `num_players` and have the option of choosing your kart
@@ -40,8 +52,55 @@ class Team:
         """
         self.team, self.num_players = team, num_players
         return ['tux'] * num_players
+    
+    def is_stuck(self, kart_location, kart_velocity, past_kart_locations, past_actions):
+        
+        
+        if len(past_kart_locations) < 5:
+            return False
+        
+        MOVEMENT_VELOCITY_THRESHOLD = 0.02
+        VELOCITY_THRESHOLD = 2.0
+        
+        no_movement = (abs(kart_location - past_kart_locations[-1]) < MOVEMENT_VELOCITY_THRESHOLD).all()
+        no_velocity = kart_velocity < VELOCITY_THRESHOLD
+        danger_zone = abs(kart_location[0]) >= 45 or abs(kart_location[1]) >= 63.5
+        
+        if no_movement and no_velocity and danger_zone:
+            if self.stuck_count < 5:
+                self.stuck_count +=1
+                return False
+            else:
+                self.stuck_count = 0
+                return True
 
-    def act(self, player_state, player_image):
+    def stuck_action(self, kart_front, kart_location, action):
+        
+                
+        if (abs(kart_location[0]) >= 45):
+            if (action['acceleration'] > 0 ):
+                action['steer'] = np.sign(kart_location[0]) * -1
+            else:
+                action['steer'] = np.sign(kart_location[0]) * 1
+        else:
+            if (self.prev_puck_location[-1][1] > kart_location[1]):
+
+                if(kart_location[0] < 0):
+                    action['steer'] = 1
+                else:
+                    action['steer'] = -1
+
+            elif(self.prev_puck_location[-1][1] < kart_location[1]):
+                if(kart_location[0] < 0):
+                    action['steer'] = -1
+                else:
+                    action['steer'] = 1
+
+        action['nitro'] = False
+        return action
+        
+
+    def act(self, player_states, player_images):
         """
         This function is called once per timestep. You're given a list of player_states and images.
 
@@ -77,113 +136,73 @@ class Team:
                  steer:        float -1..1 steering angle
         """
         import time
-
-        GOALS = np.float32([[0, 64.5], [0, -64.5]])
-
-        for i, img in enumerate(player_image):
-
-            start_time = time.time()
-            action = self.actions[i]
-
-            image = self.transform(img)
-            image = image.unsqueeze(0)
-            pred = self.model(image).cpu().detach().numpy()
-
-            end_time = time.time()
-            if end_time - start_time >= 0.05:
-                print('Warning, the act function took more than 50 milliseconds')
-            
-            puck_location_x = pred[0,0]
-            puck_location_y = pred[0,1]
-
-            
-            player = player_state[i]
-
-            kart_front = np.array(player['kart']['front'])[[0, 2]]
-            kart_location = np.array(player['kart']['location'])[[0, 2]]
-
-            dir = kart_front - kart_location
-            dir = dir / norm(dir)
-
-            # print("dir: ", dir)
-
-
-            goal_dir = GOALS[self.team - 1] - kart_location
-            # print("goal_dir: ", goal_dir)
-
-            goal_dir = goal_dir / norm(goal_dir)
-
-            goal_angle = np.arccos(np.clip(np.dot(dir, goal_dir), -1, 1))
-
-            goal_dir = GOALS[self.team - 1] - kart_location
-            goal_dist = norm(goal_dir)
-            goal_dir = goal_dir / norm(goal_dir)
-
-            goal_angle = np.arccos(np.clip(np.dot(dir, goal_dir), -1, 1))
-            signed_goal_angle = np.degrees(
-                -np.sign(np.cross(dir, goal_dir)) * goal_angle)
-
-            goal_dist = (
-                (np.clip(goal_dist, 10, 100) - 10) / 90) + 1
-            
-            MIN_ANGLE = 20
-            MAX_ANGLE = 120
-
-            puck_loc = pred[0][0]
-
-            # print("puck_loc: ", puck_loc)
-            if MIN_ANGLE < np.abs(signed_goal_angle) < MAX_ANGLE:
-                distW = 1 / goal_dist ** 3
-                aim_point = puck_loc + \
-                    np.sign(puck_loc - signed_goal_angle /
-                            100) * 0.3 * distW                
-            else:
-                aim_point = puck_loc
-              
-            
-            kart_velocity = np.array(player['kart']['velocity'])
-
-            kart_velocity = np.linalg.norm(kart_velocity)
-            # print("kart_velocity: ", kart_velocity)
-            
-            target_velocity = 15
-
-            # Use a proportional controller for steering
-            desired_steer = aim_point * 2.0
-
-            # Limit the steering to avoid extreme values
-            desired_steer = max(-1, min(1, desired_steer))
-
-            # Reduce speed if a sharp turn is detected
-            if abs(desired_steer) > 0.8:
-                target_velocity = 8
-
-            velocity_difference = target_velocity - kart_velocity
-
-            max_acceleration = 0.8 
-            brake_threshold = 0.5
-            drift_threshold = 0.3 
-
-            # Use a proportional controller for acceleration
-            if velocity_difference > 0:
-                action["acceleration"] = min(1, max(velocity_difference / 10, max_acceleration))
-                action["brake"] = False
-            else:
-                # Use brake if slowing down too fast
-                if kart_velocity < brake_threshold * target_velocity:
-                    action["acceleration"] = 0.0
-                    action["brake"] = False
-                else:
-                    action["acceleration"] = 0.0
-                    action["brake"] = False
-            action["steer"] = desired_steer
-
-            # Activate drift only when turning sharply
-            if abs(desired_steer) > drift_threshold:
-                action["drift"] = True
-            else:
-                action["drift"] = False
+        start_time = time.time()
         
-        # TODO: Change me. I'm just cruising straight
+        self.player_act(0, player_states[0], player_images[0])
+        self.player_act(1, player_states[1], player_images[1])
+        
+        end_time = time.time()
+        if end_time - start_time >= 0.05:
+            print('Warning, the act function took more than 50 milliseconds')
+        
         return self.actions
-        #return [dict(acceleration=0.5, steer=puck_locaton)] * self.num_players
+    
+    def player_act(self, player_id, player_state, player_image):
+        
+        action = self.actions[player_id]
+        past_kart_locations = self.past_kart_locations[player_id]
+        past_actions = self.past_actions[player_id]
+        past_state = self.past_states[player_id]
+
+        t_image = self.transform(player_image)
+        t_image = t_image.unsqueeze(0)
+        puck_location = self.model(t_image).cpu().detach().numpy()
+
+        kart_front = np.array(player_state['kart']['front'])[[0, 2]]
+        kart_location = np.array(player_state['kart']['location'])[[0, 2]]
+        past_kart_locations.append(kart_location)
+        kart_velocity = np.array(player_state['kart']['velocity'])
+        kart_velocity = np.linalg.norm(kart_velocity)
+        
+        target_velocity = 15
+
+        # Use a proportional controller for steering
+        desired_steer = puck_location[0][0] * 2.0
+
+        # Limit the steering to avoid extreme values
+        desired_steer = max(-1, min(1, desired_steer))
+
+        # Reduce speed if a sharp turn is detected
+        if abs(desired_steer) > 0.8:
+            target_velocity = 8
+
+        velocity_difference = target_velocity - kart_velocity
+
+        max_acceleration = 0.8 
+        brake_threshold = 0.5
+        drift_threshold = 0.3 
+
+        # Use a proportional controller for acceleration
+        if velocity_difference > 0:
+            action["acceleration"] = min(1, max(velocity_difference / 10, max_acceleration))
+            action["brake"] = False
+        else:
+            # Use brake if slowing down too fast
+            if kart_velocity < brake_threshold * target_velocity:
+                action["acceleration"] = 0.0
+                action["brake"] = True
+            else:
+                action["acceleration"] = 0.0
+                action["brake"] = False
+        action["steer"] = desired_steer
+
+        # Activate drift only when turning sharply
+        if abs(desired_steer) > drift_threshold:
+            action["drift"] = True
+        else:
+            action["drift"] = False
+            
+        if self.is_stuck(kart_location, kart_velocity, past_kart_locations, past_actions):
+            action = self.stuck_action(kart_front, kart_location, action)
+            
+        self.prev_puck_location = puck_location
