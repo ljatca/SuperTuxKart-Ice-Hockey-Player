@@ -4,13 +4,17 @@ import torch
 from .planner import load_model
 import torchvision.transforms.functional as TF
 import matplotlib.pyplot as plt
-from .utils import save_image
 from collections import deque
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
-def norm(vector):
-    return np.linalg.norm(vector)
+# This fucntion is adapted from https://stackoverflow.com/questions/2827393/angles-between-two-n-dimensional-vectors-in-python
+def angle_between(v1, v2):
+    return np.arccos(np.clip(np.dot(v1, v2), -1.0, 1.0))
+
+def get_direction_vector(p1, p2):
+    direction_vector = p2 - p1
+    return direction_vector / np.linalg.norm(direction_vector)
 
 class Team:
     agent_type = 'image'
@@ -25,17 +29,25 @@ class Team:
         self.model = load_model()
         self.num_players = None
         self.transform = TF.to_tensor
-        self.actions = [{'acceleration': 0, 'brake': False, 'drift': False, 'nitro': False, 'rescue': False, 'steer': 0},
-                        {'acceleration': 0, 'brake': False, 'drift': False, 'nitro': False, 'rescue': False, 'steer': 0}]
+        self.actions = [{'acceleration': 1, 'brake': False, 'drift': False, 'nitro': False, 'rescue': False, 'steer': 0},
+                        {'acceleration': 1, 'brake': False, 'drift': False, 'nitro': False, 'rescue': False, 'steer': 0}]
         
         self.prev_puck_location = []
         self.past_states = [None, None]
         self.past_puck_locations = deque(maxlen=5)
         self.past_kart_locations = [deque(maxlen=5), deque(maxlen=5)]
         self.past_actions = [deque(maxlen=5), deque(maxlen=5)]
-        self.stuck_count = 0
+
+        self.goal_stuck_count = [0, 0]
+        self.wall_stuck_count = [0, 0]
+        self.their_goal_left = (-10, -64)
+        self.their_goal_center = (0, -64)
+        self.their_goal_right = (10, -64)
+        self.search_count = 0
         
-        self.goal = [(-10.4, -64.5), (-10.4, 64.5)]
+        self.RED_goal_line = (0, 64.5)
+        self.BLUE_goal_line = (0, -64.5)
+        
         
     def new_match(self, team: int, num_players: int) -> list:
         """
@@ -53,29 +65,66 @@ class Team:
         self.team, self.num_players = team, num_players
         return ['tux'] * num_players
     
-    def is_stuck(self, kart_location, kart_velocity, past_kart_locations, past_actions):
+    def stuck_in_goal(self, kart_loc):
+        # print("stuck_in_goal")
+        return abs(kart_loc[0]) < 10 and abs(kart_loc[1]) > 64
         
+    def stuck_in_goal_action(self, action, kart_front, kart_location):
+        # print("stuck_in_goal_action")
         
+        blue_goal = kart_location[1] > 0
+
+        if (blue_goal and kart_front[1] - kart_location[1] > -0.3) or (not blue_goal and kart_front[1] - kart_location[1] < 0.3):
+            action['acceleration'] = 0
+            action['brake'] = True
+            action['steer'] = 1 if self.prev_puck_location[0] < kart_location[0] else -1
+
+        else:
+            action['acceleration'] = 1
+            action['brake'] = False
+            action['steer'] = -1 if (blue_goal and self.prev_puck_location[0] > kart_location[0]) or \
+                                (not blue_goal and self.prev_puck_location[0] < kart_location[0]) else 1
+
+        if abs(kart_location[1]) > 64:
+            action['steer'] *= ((10 - abs(kart_location[0])) / 10)
+
+        action['nitro'] = False
+        return action
+
+    
+    def stuck_on_wall(self, kart_location, kart_velocity, past_kart_locations, past_actions):
+        # print("stuck_on_wall")
         if len(past_kart_locations) < 5:
             return False
         
         MOVEMENT_VELOCITY_THRESHOLD = 0.02
-        VELOCITY_THRESHOLD = 2.0
+        VELOCITY_THRESHOLD = 1.0
         
         no_movement = (abs(kart_location - past_kart_locations[-1]) < MOVEMENT_VELOCITY_THRESHOLD).all()
         no_velocity = kart_velocity < VELOCITY_THRESHOLD
         danger_zone = abs(kart_location[0]) >= 45 or abs(kart_location[1]) >= 63.5
         
-        if no_movement and no_velocity and danger_zone:
-            if self.stuck_count < 5:
-                self.stuck_count +=1
-                return False
-            else:
-                self.stuck_count = 0
-                return True
-
-    def stuck_action(self, kart_front, kart_location, action):
+        return no_movement and no_velocity and danger_zone
+            
+    def stuck_on_wall_action(self, kart_front, kart_location, action):
         
+        # Got in the blue goal
+        if (kart_location[1] < 0):
+            
+            # if kart is facing blue goal, backup; otherwise keep moving forward
+            if (kart_front[1] - kart_location[1] < 0):
+                action['acceleration'] = 0
+                action['brake'] = True
+            else:
+                action['acceleration'] = 1
+        # Got in the red goal
+        else:
+            # if kart is facing red goal, backup; otherwise keep moving forward
+            if (kart_front[1] - kart_location[1] > 0):
+                action['acceleration'] = 0
+                action['brake'] = True
+            else:
+                action['acceleration'] = 1
                 
         if (abs(kart_location[0]) >= 45):
             if (action['acceleration'] > 0 ):
@@ -83,22 +132,22 @@ class Team:
             else:
                 action['steer'] = np.sign(kart_location[0]) * 1
         else:
-            if (self.prev_puck_location[-1][1] > kart_location[1]):
+            if (self.prev_puck_location[1] > kart_location[1]):
 
                 if(kart_location[0] < 0):
                     action['steer'] = 1
                 else:
                     action['steer'] = -1
 
-            elif(self.prev_puck_location[-1][1] < kart_location[1]):
+            elif(self.prev_puck_location[1] < kart_location[1]):
                 if(kart_location[0] < 0):
                     action['steer'] = -1
                 else:
                     action['steer'] = 1
-
+        # action['brake'] = True
+        # action['acceleration'] = 0
         action['nitro'] = False
         return action
-        
 
     def act(self, player_states, player_images):
         """
@@ -149,6 +198,9 @@ class Team:
     
     def player_act(self, player_id, player_state, player_image):
         
+        goal = self.RED_goal_line if self.team == 0 else self.BLUE_goal_line
+        
+        # Get game data
         action = self.actions[player_id]
         past_kart_locations = self.past_kart_locations[player_id]
         past_actions = self.past_actions[player_id]
@@ -156,18 +208,43 @@ class Team:
 
         t_image = self.transform(player_image)
         t_image = t_image.unsqueeze(0)
-        puck_location = self.model(t_image).cpu().detach().numpy()
+        puck_location = (self.model(t_image).cpu().detach().numpy())[0]
 
         kart_front = np.array(player_state['kart']['front'])[[0, 2]]
         kart_location = np.array(player_state['kart']['location'])[[0, 2]]
-        past_kart_locations.append(kart_location)
         kart_velocity = np.array(player_state['kart']['velocity'])
         kart_velocity = np.linalg.norm(kart_velocity)
+
         
+        puck_dirction = get_direction_vector(kart_location, puck_location)
+        heading_dirction = get_direction_vector(kart_location, kart_front)
+        goal_dirction = get_direction_vector(kart_location, goal)
+        facing_angle = np.degrees(angle_between(heading_dirction, goal_dirction))
+        
+        vector_right = get_direction_vector(kart_location, self.their_goal_right)
+        vector_center = get_direction_vector(kart_location, self.their_goal_center)
+        vector_left = get_direction_vector(kart_location, self.their_goal_left)
+        attack_cone = np.degrees(angle_between(vector_left, vector_right))
+        
+        x = puck_location[0]
+        y = puck_location[1]
+        
+        # print(f"player: {player_id}, kart_front: {kart_front}, kart_location: {kart_location}")
+        
+        if self.goal_stuck_count[player_id] > 0:
+            self.goal_stuck_count[player_id] -= 1
+            self.stuck_in_goal_action(action, kart_front, kart_location)
+            return
+
+        if self.wall_stuck_count[player_id] > 0:
+            self.wall_stuck_count[player_id] -= 1
+            self.stuck_on_wall_action(kart_front, kart_location, action)
+            return
+
         target_velocity = 15
 
         # Use a proportional controller for steering
-        desired_steer = puck_location[0][0] * 2.0
+        desired_steer = puck_location[0] * 2.0
 
         # Limit the steering to avoid extreme values
         desired_steer = max(-1, min(1, desired_steer))
@@ -182,27 +259,35 @@ class Team:
         brake_threshold = 0.5
         drift_threshold = 0.3 
 
-        # Use a proportional controller for acceleration
-        if velocity_difference > 0:
-            action["acceleration"] = min(1, max(velocity_difference / 10, max_acceleration))
-            action["brake"] = False
+        if self.stuck_in_goal(kart_location):
+            # print("inGoal")
+            self.goal_stuck_count[player_id] = 5
+            action = self.stuck_in_goal_action(action, kart_front, kart_location)
+            
+        elif self.stuck_on_wall(kart_location, kart_velocity, past_kart_locations, past_actions):
+            # print("get stuck")
+            self.wall_stuck_count[player_id] = 7
+            action = self.stuck_on_wall_action(kart_front, kart_location, action)
         else:
-            # Use brake if slowing down too fast
-            if kart_velocity < brake_threshold * target_velocity:
-                action["acceleration"] = 0.0
-                action["brake"] = True
-            else:
-                action["acceleration"] = 0.0
-                action["brake"] = False
-        action["steer"] = desired_steer
+          # Use a proportional controller for acceleration
+          if velocity_difference > 0:
+              action["acceleration"] = min(1, max(velocity_difference / 10, max_acceleration))
+              action["brake"] = False
+          else:
+              # Use brake if slowing down too fast
+              if kart_velocity < brake_threshold * target_velocity:
+                  action["acceleration"] = 0.0
+                  action["brake"] = True
+              else:
+                  action["acceleration"] = 0.0
+                  action["brake"] = False
+          action["steer"] = desired_steer
 
-        # Activate drift only when turning sharply
-        if abs(desired_steer) > drift_threshold:
-            action["drift"] = True
-        else:
-            action["drift"] = False
-            
-        if self.is_stuck(kart_location, kart_velocity, past_kart_locations, past_actions):
-            action = self.stuck_action(kart_front, kart_location, action)
-            
-        self.prev_puck_location = puck_location
+          # Activate drift only when turning sharply
+          if abs(desired_steer) > drift_threshold:
+              action["drift"] = True
+          else:
+              action["drift"] = False
+              
+          self.prev_puck_location = puck_location
+          past_kart_locations.append(kart_location)
