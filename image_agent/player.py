@@ -100,45 +100,34 @@ class Team:
             
     def stuck_on_wall_action(self, kart_front, kart_location, action):
         
-        # Got in the blue goal
-        if (kart_location[1] < 0):
-            
-            # if kart is facing blue goal, backup; otherwise keep moving forward
-            if (kart_front[1] - kart_location[1] < 0):
-                action['acceleration'] = 0
-                action['brake'] = True
-            else:
-                action['acceleration'] = 1
-        # Got in the red goal
-        else:
-            # if kart is facing red goal, backup; otherwise keep moving forward
+        in_blue_goal = kart_location[1] > 0
+        
+        if (in_blue_goal):
+            # Reverse if kart is in the blue goal, otherwise keep moving forward
             if (kart_front[1] - kart_location[1] > 0):
                 action['acceleration'] = 0
                 action['brake'] = True
             else:
                 action['acceleration'] = 1
-                
-        if (abs(kart_location[0]) >= 45):
-            if (action['acceleration'] > 0 ):
-                action['steer'] = np.sign(kart_location[0]) * -1
-            else:
-                action['steer'] = np.sign(kart_location[0]) * 1
         else:
-            if (self.prev_puck_location[1] > kart_location[1]):
+            if (kart_front[1] - kart_location[1] < 0):
+                action['acceleration'] = 0
+                action['brake'] = True
+            else:
+                action['acceleration'] = 1
+        
+        # Adjust steering if kart is too close to walls
+        if abs(kart_location[0]) >= 45:
+            action['steer'] = np.sign(kart_location[0]) * (-1 if action['acceleration'] > 0 else 1)
+        else:
+            # Adjust steering based on puck location relative to kart
+            if self.prev_puck_location[1] > kart_location[1]:
+                action['steer'] = 1 if kart_location[0] < 0 else -1
+            elif self.prev_puck_location[1] < kart_location[1]:
+                action['steer'] = -1 if kart_location[0] < 0 else 1
 
-                if(kart_location[0] < 0):
-                    action['steer'] = 1
-                else:
-                    action['steer'] = -1
-
-            elif(self.prev_puck_location[1] < kart_location[1]):
-                if(kart_location[0] < 0):
-                    action['steer'] = -1
-                else:
-                    action['steer'] = 1
         # action['brake'] = True
         # action['acceleration'] = 0
-        action['nitro'] = False
         return action
 
     def act(self, player_states, player_images):
