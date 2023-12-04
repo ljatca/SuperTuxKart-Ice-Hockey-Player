@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 
-
+# This model is cited from Homework 5 solution
 def spatial_argmax(logit):
     """
     Compute the soft-argmax of a heatmap
