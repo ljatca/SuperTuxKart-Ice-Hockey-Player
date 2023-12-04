@@ -8,10 +8,6 @@ from collections import deque
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
-# This fucntion is adapted from https://stackoverflow.com/questions/2827393/angles-between-two-n-dimensional-vectors-in-python
-def angle_between(v1, v2):
-    return np.arccos(np.clip(np.dot(v1, v2), -1.0, 1.0))
-
 def get_direction_vector(p1, p2):
     direction_vector = p2 - p1
     return direction_vector / np.linalg.norm(direction_vector)
@@ -40,10 +36,6 @@ class Team:
 
         self.goal_stuck_count = [0, 0]
         self.wall_stuck_count = [0, 0]
-        self.their_goal_left = (-10, -64)
-        self.their_goal_center = (0, -64)
-        self.their_goal_right = (10, -64)
-        self.search_count = 0
         
         self.RED_goal_line = (0, 64.5)
         self.BLUE_goal_line = (0, -64.5)
@@ -214,20 +206,6 @@ class Team:
         kart_location = np.array(player_state['kart']['location'])[[0, 2]]
         kart_velocity = np.array(player_state['kart']['velocity'])
         kart_velocity = np.linalg.norm(kart_velocity)
-
-        
-        puck_dirction = get_direction_vector(kart_location, puck_location)
-        heading_dirction = get_direction_vector(kart_location, kart_front)
-        goal_dirction = get_direction_vector(kart_location, goal)
-        facing_angle = np.degrees(angle_between(heading_dirction, goal_dirction))
-        
-        vector_right = get_direction_vector(kart_location, self.their_goal_right)
-        vector_center = get_direction_vector(kart_location, self.their_goal_center)
-        vector_left = get_direction_vector(kart_location, self.their_goal_left)
-        attack_cone = np.degrees(angle_between(vector_left, vector_right))
-        
-        x = puck_location[0]
-        y = puck_location[1]
         
         # print(f"player: {player_id}, kart_front: {kart_front}, kart_location: {kart_location}")
         
@@ -260,12 +238,12 @@ class Team:
         drift_threshold = 0.3 
 
         if self.stuck_in_goal(kart_location):
-            # print("inGoal")
+            # print("stuck_in_goal")
             self.goal_stuck_count[player_id] = 5
             action = self.stuck_in_goal_action(action, kart_front, kart_location)
             
         elif self.stuck_on_wall(kart_location, kart_velocity, past_kart_locations, past_actions):
-            # print("get stuck")
+            # print("stuck_on_wall")
             self.wall_stuck_count[player_id] = 7
             action = self.stuck_on_wall_action(kart_front, kart_location, action)
         else:
